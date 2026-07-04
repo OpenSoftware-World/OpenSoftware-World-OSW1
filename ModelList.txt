@@ -1,0 +1,5 @@
+OpenSoftware-World-OSW1 AI model list and descriptions:
+
+* OpenSoftware-World-OSW1:5m (Ideal for simple conversations, but highly likely to generate nonsensical responses.)
+* OpenSoftware-World-OSW1:10m (Can handle simple conversations, but there is still a risk of generating nonsensical responses.)
+* OpenSoftware-World-OSW1:100m (Our most ideal model for simple conversations, and the risk of generating nonsensical responses is much lower.)
