@@ -193,8 +193,10 @@ def load_checkpoint(path: str):
     # regardless of which device (GPU/MPS/CPU) it was trained on.
     ckpt = torch.load(path, map_location="cpu")
 
+    tokenizer_path = os.path.join(os.path.dirname(path), "opensoftware_world_osw1_tokenizer.model")
+
     cfg = ckpt["config"]
-    vocab = Vocab("opensoftware_world_osw1_tokenizer.model")
+    vocab = Vocab(tokenizer_path)
     pad_id = vocab.sp.pad_id()
 
     model = OSW1Model(len(vocab), cfg, pad_id=pad_id).to(DEVICE)
