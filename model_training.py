@@ -442,6 +442,25 @@ def get_autocast_context():
     else:
         return contextlib.nullcontext()
 
+def find_latest_epoch_checkpoint(checkpoint_prefix: str):
+    """
+    Looks for the most recent per-epoch checkpoint on disk (e.g.
+    opensoftware_world_osw1_11m_epoch2.pth) and returns its path together with
+    the epoch number, or (None, 0) if nothing is found.
+    """
+    pattern = f"{checkpoint_prefix}_*_epoch*.pth"
+    candidates = glob.glob(pattern)
+    if not candidates:
+        return None, 0
+
+    def _epoch_num(path):
+        m = re.search(r"_epoch(\d+)\.pth$", path)
+        return int(m.group(1)) if m else -1
+
+    candidates.sort(key=_epoch_num)
+    latest_path = candidates[-1]
+    return latest_path, _epoch_num(latest_path)
+
 def train(cfg: OSW1Config):
     vocab = Vocab()
     sequences = build_corpus(cfg, vocab)
@@ -494,10 +513,31 @@ def train(cfg: OSW1Config):
     print(f"🏋️  Training starting... ({cfg.epochs} epoch, batch={cfg.batch_size}, "
           f"grad_accum={cfg.grad_accum_steps})\n")
 
+    # --- Resume from the latest per-epoch checkpoint, if one exists ---
+    start_epoch = 1
     global_step = 0
+    avg_loss = 0.0
+    latest_ckpt_path, latest_ckpt_epoch = find_latest_epoch_checkpoint(cfg.checkpoint_prefix)
+    if latest_ckpt_path is not None:
+        print(f"🔄 Existing checkpoint found, resuming from where we left off: {latest_ckpt_path}")
+        resume_data = torch.load(latest_ckpt_path, map_location=DEVICE)
+        model.load_state_dict(resume_data["model_state_dict"])
+        optimizer.load_state_dict(resume_data["optimizer_state_dict"])
+        if use_grad_scaler and resume_data.get("scaler_state_dict") is not None:
+            scaler.load_state_dict(resume_data["scaler_state_dict"])
+        start_epoch = resume_data["epoch"] + 1
+        global_step = resume_data.get("global_step", 0)
+        avg_loss = resume_data.get("final_loss", 0.0)
+        print(f"✅ Resuming after epoch {resume_data['epoch']} -> starting at epoch {start_epoch}\n")
+    else:
+        print("ℹ️  No existing checkpoint found, starting training from scratch.\n")
+
+    if start_epoch > cfg.epochs:
+        print("🎉 All epochs were already completed according to the saved checkpoints.\n")
+
     train_start = time.time()
 
-    for epoch in range(1, cfg.epochs + 1):
+    for epoch in range(start_epoch, cfg.epochs + 1):
         epoch_start = time.time()
         epoch_loss, n_batches = 0.0, 0
         optimizer.zero_grad(set_to_none=True)
@@ -537,6 +577,22 @@ def train(cfg: OSW1Config):
             f"lr={current_lr:.2e} | "
             f"time={epoch_time:.1f}s | total={elapsed_total/60:.1f}m"
         )
+
+        # --- Save a per-epoch checkpoint so training can be resumed later ---
+        epoch_ckpt_path = f"{cfg.checkpoint_prefix}_{size_tag}_epoch{epoch}.pth"
+        epoch_cpu_state_dict = {k: v.detach().cpu() for k, v in model.state_dict().items()}
+        torch.save({
+            "model_state_dict": epoch_cpu_state_dict,
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scaler_state_dict": scaler.state_dict() if use_grad_scaler else None,
+            "config": cfg.__dict__,
+            "pad_id": pad_id,
+            "epoch": epoch,
+            "global_step": global_step,
+            "final_loss": avg_loss,
+            "trained_on_device": DEVICE.type,
+        }, epoch_ckpt_path)
+        print(f"💾 Epoch {epoch} checkpoint saved: {epoch_ckpt_path}\n")
 
     total_time = time.time() - train_start
     print(f"\n✅ Training completed! Total time: "
