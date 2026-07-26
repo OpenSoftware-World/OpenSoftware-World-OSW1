@@ -54,6 +54,7 @@ keys/
 *.user
 out/
 bin/
+data/
 *.dll
 *.so
 *.dylib
